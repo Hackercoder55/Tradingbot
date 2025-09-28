@@ -7,24 +7,26 @@ app = Flask(__name__)
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
+# --- SYMBOL MAPPING CONFIGURATION ---
+# Add your symbol translations here.
+# Format: "SymbolFromTradingView": "SymbolYouWantToSee"
+SYMBOL_MAP = {
+    "BTCUSD": "BTCUSDC"
+    # You can add more, e.g., "ETHUSD": "ETHUSDC"
+}
+# ------------------------------------
+
 if not BOT_TOKEN or not CHAT_ID:
     print("FATAL ERROR: BOT_TOKEN or CHAT_ID environment variables are not set.")
 
 TELEGRAM_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-# --- NEW CODE ADDED FOR UPTIMEROBOT ---
 @app.route('/')
 def health_check():
-    """
-    This is a health check endpoint for UptimeRobot.
-    It responds with a simple success message so UptimeRobot knows the service is live.
-    """
     return "OK", 200
-# ----------------------------------------
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    # ... (the rest of your webhook code is unchanged) ...
     try:
         message = request.data.decode('utf-8')
         print(f"Received message: {message}")
@@ -33,16 +35,23 @@ def webhook():
             parts = {item.split(':')[0].strip(): item.split(':', 1)[1].strip() for item in message.split(',')}
             
             signal_type = parts.get('signal', 'N/A').upper()
-            ticker = parts.get('ticker', 'N/A')
+            original_ticker = parts.get('ticker', 'N/A')
+            
+            # --- NEW LOGIC ---
+            # Look up the original ticker in the map.
+            # If it's not found, use the original ticker as a fallback.
+            final_ticker = SYMBOL_MAP.get(original_ticker, original_ticker)
+            
             price = parts.get('price', 'N/A')
             quantity = parts.get('qty', 'N/A')
             stop_loss = parts.get('sl', 'N/A')
             take_profit = parts.get('tp', 'N/A')
             
+            # The formatted message now uses the final_ticker
             formatted_message = (
                 f"🚨 New TradingView Alert! 🚨\n\n"
                 f"Signal: **{signal_type}**\n"
-                f"Ticker: {ticker}\n\n"
+                f"Ticker: {final_ticker}\n\n"
                 f"Entry Price: ${price}\n"
                 f"Quantity: {quantity}\n\n"
                 f"Stop Loss: ${stop_loss}\n"
