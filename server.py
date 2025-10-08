@@ -7,97 +7,92 @@ from binance.exceptions import BinanceAPIException
 app = Flask(__name__)
 
 # --- SECRET KEYS & CONFIGURATION ---
-# These are read from Render's Environment Variables for security
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY")
 BINANCE_API_SECRET = os.environ.get("BINANCE_API_SECRET")
 
-# Initialize the Binance Client safely
 try:
-    if BINANCE_API_KEY and BINANCE_API_SECRET:
-        binance_client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
-    else:
-        binance_client = None
-        print("Binance API keys not found. Auto-trading features will be disabled.")
+    binance_client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
+    binance_client.FUTURES_URL = 'https://fapi.binance.com' 
 except Exception as e:
     binance_client = None
     print(f"Could not initialize Binance Client. Error: {e}")
 
-# --- SYMBOL MAPPING CONFIGURATION ---
 TELEGRAM_SYMBOL_MAP = {"BTCUSD": "BTCUSDC"}
 BINANCE_SYMBOL_MAP = {"BTCUSD": "BTCUSDT", "ETHUSD": "ETHUSDT"}
 TELEGRAM_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
 def place_binance_order(signal, ticker, quantity):
-    """Places a market order on Binance for trade entry."""
+    # This function for entry remains the same
     if not binance_client:
-        return False, "Binance Client not initialized. Check API keys."
+        return False, "Binance Client not initialized."
     try:
         trade_symbol = BINANCE_SYMBOL_MAP.get(ticker, ticker)
         trade_side = Client.SIDE_BUY if signal.upper() == 'LONG' else Client.SIDE_SELL
         
-        print(f"Attempting to place order: {trade_side} {quantity} of {trade_symbol}")
-        order = binance_client.create_order(
+        print(f"Attempting to place FUTURES order: {trade_side} {quantity} of {trade_symbol}")
+        order = binance_client.futures_create_order(
             symbol=trade_symbol,
             side=trade_side,
             type=Client.ORDER_TYPE_MARKET,
             quantity=quantity)
-        print("Binance order successful:", order)
-        return True, "Order placed successfully."
-    except BinanceAPIException as e:
-        error_message = f"Binance API Error: {e.message}"
-        print(error_message)
-        return False, error_message
+        print("Binance Futures order successful:", order)
+        return True, "Futures order placed successfully."
     except Exception as e:
-        error_message = f"An unexpected error occurred: {str(e)}"
-        print(error_message)
-        return False, error_message
+        return False, f"Binance Futures API Error: {str(e)}"
 
-def close_binance_position(ticker):
-    """Closes all open positions for a given spot asset by selling it."""
+# ===================================================================
+# === NEW, CORRECTED FUNCTION FOR FUTURES EXITS ===
+# ===================================================================
+def close_futures_position(ticker):
+    """Closes an open futures position by placing an opposing market order."""
     if not binance_client:
         return False, "Binance Client not initialized."
 
     try:
         trade_symbol = BINANCE_SYMBOL_MAP.get(ticker, ticker)
-        asset = trade_symbol.replace('USDT', '') # e.g., 'BTC' from 'BTCUSDT'
         
-        # Get the current balance for the asset
-        balance = binance_client.get_asset_balance(asset=asset)
-        if balance and float(balance['free']) > 0:
-            quantity_to_sell = float(balance['free'])
+        # Get all open positions from the futures account
+        positions = binance_client.futures_position_information()
+        # Find the specific position for our symbol
+        target_position = next((p for p in positions if p['symbol'] == trade_symbol), None)
+
+        if target_position and float(target_position['positionAmt']) != 0:
+            quantity = abs(float(target_position['positionAmt']))
+            is_long = float(target_position['positionAmt']) > 0
             
-            print(f"Attempting to close position: SELL {quantity_to_sell} of {trade_symbol}")
-            order = binance_client.create_order(
+            # To close a position, we place an order on the opposite side
+            close_side = Client.SIDE_SELL if is_long else Client.SIDE_BUY
+            
+            print(f"Attempting to close FUTURES position: {close_side} {quantity} of {trade_symbol}")
+            order = binance_client.futures_create_order(
                 symbol=trade_symbol,
-                side=Client.SIDE_SELL,
+                side=close_side,
                 type=Client.ORDER_TYPE_MARKET,
-                quantity=quantity_to_sell
+                quantity=quantity,
+                reduceOnly=True # Important: ensures this order only closes a position
             )
-            print("Binance close order successful:", order)
+            print("Binance Futures close order successful:", order)
             return True, f"Position for {trade_symbol} closed successfully."
         else:
-            print(f"No open position found for asset {asset}.")
-            return False, f"No open position found for {asset}."
+            print(f"No open futures position found for {trade_symbol}.")
+            return False, f"No open futures position found for {trade_symbol}."
             
     except BinanceAPIException as e:
-        error_message = f"Binance API Error on close: {e.message}"
-        print(error_message)
-        return False, error_message
+        return False, f"Binance API Error on close: {e.message}"
     except Exception as e:
-        error_message = f"An unexpected error occurred on close: {str(e)}"
-        print(error_message)
-        return False, error_message
+        return False, f"An unexpected error occurred on close: {str(e)}"
+# ===================================================================
+# === END OF NEW FUNCTION ===
+# ===================================================================
 
 @app.route('/')
 def health_check():
-    """Health check endpoint for UptimeRobot."""
     return "OK", 200
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """Main webhook to receive and process alerts from TradingView."""
     try:
         message = request.data.decode('utf-8')
         print(f"Received message: {message}")
@@ -106,24 +101,26 @@ def webhook():
         action = parts.get('action', 'message').strip()
         original_ticker = parts.get('ticker', 'N/A').strip()
         
-        # --- LOGIC TO HANDLE DIFFERENT ACTIONS ---
         if action == 'close':
-            success, result_message = close_binance_position(original_ticker)
+            # This now calls the correct futures function
+            success, result_message = close_futures_position(original_ticker)
             status_prefix = "✅" if success else "❌"
             formatted_message = (f"{status_prefix} **Position Close Signal**\n\n"
                                  f"**Ticker:** {original_ticker}\n"
                                  f"**Close Price:** ${parts.get('price', 'N/A').strip()}\n\n"
                                  f"**Binance Status:** {result_message}")
-        else: # Handles both 'enter' and 'message'
+        else:
+            # This part for entry/message remains the same
             binance_status_message = ""
             signal_type = parts.get('signal', 'N/A').upper().strip()
             final_ticker = TELEGRAM_SYMBOL_MAP.get(original_ticker, original_ticker)
             quantity = parts.get('qty', 'N/A').strip()
             
             if action == 'enter':
+                # This needs to call the futures entry function
                 success, result_message = place_binance_order(signal_type, original_ticker, quantity)
                 binance_status_message = f"✅ **Binance Order:** {result_message}" if success else f"❌ **Binance Order:** {result_message}"
-            else: # action == 'message'
+            else:
                 binance_status_message = "*(Notification Only)*"
 
             price = parts.get('price', 'N/A').strip()
@@ -140,7 +137,6 @@ def webhook():
                 f"**Take Profit:** ${take_profit}"
             )
 
-        # Send the final message to Telegram
         payload = {"chat_id": CHAT_ID, "text": formatted_message, "parse_mode": "Markdown"}
         r = requests.post(TELEGRAM_URL, json=payload)
         r.raise_for_status()
