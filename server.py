@@ -23,8 +23,8 @@ FIXED_STOP_LOSS_POINTS = 200  # 200 points
 FIXED_TAKE_PROFIT_POINTS = 1300 # 1300 points
 
 # NEW: Define the quantities you want to block
-BLOCKED_QUANTITIES = {0.05, 0.075, 0.1, 0.125, 0.15, 0.3, 0.4} # Updated list
-QUANTITY_CEILING = 0.475
+BLOCKED_QUANTITIES = {0.05, 0.075, 0.1, 0.125, 0.15} # Updated list
+QUANTITY_CEILING = 0.485
 
 # --- INITIALIZE BINANCE CLIENT ---
 try:
@@ -196,4 +196,5 @@ def webhook():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
 
