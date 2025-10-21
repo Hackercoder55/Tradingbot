@@ -23,8 +23,8 @@ FIXED_STOP_LOSS_POINTS = 200  # 200 points
 FIXED_TAKE_PROFIT_POINTS = 1300 # 1300 points
 
 # NEW: Define the quantities you want to block
-BLOCKED_QUANTITIES = {0.05, 0.075, 0.1, 0.125, 0.15,} # Updated list
-QUANTITY_CEILING = 0.485
+BLOCKED_QUANTITIES = {0.05, 0.075, 0.1, 0.125, 0.15, 0.3, 0.4} # Updated list
+QUANTITY_CEILING = 0.475
 
 # --- INITIALIZE BINANCE CLIENT ---
 try:
@@ -75,7 +75,7 @@ def place_entry_order(signal, quantity):
         logging.error(f"Binance Futures API Error on entry: {str(e)}")
         return None, f"Binance Futures API Error: {str(e)}"
 
-def place_sl_tp_orders(entry_price, side):
+def place_sl_tp_orders(side, entry_price):
     if not binance_client: return "Binance Client not initialized."
     is_long = side.upper() == Client.SIDE_BUY
     stop_loss_price = round(entry_price - FIXED_STOP_LOSS_POINTS if is_long else entry_price + FIXED_STOP_LOSS_POINTS, 2)
@@ -196,3 +196,4 @@ def webhook():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
