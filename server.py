@@ -4,42 +4,48 @@ import os
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
 import logging
-import json # Import the json library
+import json
+from dotenv import load_dotenv # <-- NEW IMPORT
+
+load_dotenv() # <-- NEW: Explicitly load .env file variables
 
 # --- Basic Logging Setup ---
+# (Keep your existing logging setup)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 app = Flask(__name__)
 
 # --- SECRET KEYS & CONFIGURATION ---
+# These will now be loaded reliably by load_dotenv() from your .env file
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY")
 BINANCE_API_SECRET = os.environ.get("BINANCE_API_SECRET")
 
 # --- STRATEGY CONFIGURATION ---
-TRADE_SYMBOL = "BTCUSDC"  # The symbol we are trading on Binance
+TRADE_SYMBOL = "BTCUSDC"
 LEVERAGE = 125
-FIXED_STOP_LOSS_POINTS = 200  # 200 points ($)
-FIXED_TAKE_PROFIT_POINTS = 1300 # 1300 points ($) (Derived from 6.5 RR * 200 SL)
+FIXED_STOP_LOSS_POINTS = 200
+FIXED_TAKE_PROFIT_POINTS = 1300
 
 # --- INITIALIZE BINANCE CLIENT ---
+# This section remains critical. If it fails now, the keys ARE wrong or permissions are off.
 try:
+    if not BINANCE_API_KEY or not BINANCE_API_SECRET:
+        raise ValueError("Binance API Key or Secret not found in environment variables.")
     binance_client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
-    # Ensure connection is to Futures Testnet or Mainnet as appropriate
-    # For Mainnet:
     binance_client.FUTURES_URL = 'https://fapi.binance.com'
-    # For Testnet (if you want to test without real money):
-    # binance_client.FUTURES_URL = 'https://testnet.binancefuture.com'
-    # binance_client.API_URL = 'https://testnet.binancefuture.com/fapi' # Needed for testnet client setup
-
     server_time = binance_client.futures_time()
     logging.info(f"Successfully connected to Binance Futures. Server time: {server_time['serverTime']}")
 except Exception as e:
     binance_client = None
-    logging.error(f"FATAL: Could not initialize Binance Client. Error: {e}")
+    # Log the specific error during initialization VERY CLEARLY
+    logging.error(f"FATAL: Could not initialize Binance Client during startup. Error: {e}")
+    # Optionally send a Telegram alert that the bot failed to start
+    # send_telegram_message("🚨 BOT STARTUP FAILED: Could not connect to Binance. Check API keys and server logs.")
 
-# --- HELPER FUNCTIONS ---
+
+# --- HELPER FUNCTIONS (send_telegram_message, set_leverage, place_entry_order, place_sl_tp_orders remain the same) ---
 def send_telegram_message(message):
     if not BOT_TOKEN or not CHAT_ID:
         logging.warning("Telegram BOT_TOKEN or CHAT_ID not set.")
@@ -53,13 +59,13 @@ def send_telegram_message(message):
         logging.error(f"Error sending Telegram message: {e}")
 
 def set_leverage(symbol, leverage):
-    if not binance_client: return False, "Binance client not initialized."
+    if not binance_client: return False, "Binance client not initialized." # This error points to startup failure
     try:
         response = binance_client.futures_change_leverage(symbol=symbol, leverage=leverage)
         logging.info(f"Leverage change response for {symbol}: {response}")
         return True, f"Leverage set to {leverage}x (or already was)."
     except BinanceAPIException as e:
-        if e.code == -4046: # "No need to change leverage"
+        if e.code == -4046:
             logging.info(f"Leverage for {symbol} is already {leverage}x.")
             return True, f"Leverage is already {leverage}x."
         logging.error(f"Error setting leverage for {symbol}: Code={e.code}, Msg={e.message}")
@@ -91,9 +97,8 @@ def place_sl_tp_orders(side, entry_price):
     take_profit_price = round(entry_price + FIXED_TAKE_PROFIT_POINTS if is_long else entry_price - FIXED_TAKE_PROFIT_POINTS, 2)
     close_side = Client.SIDE_SELL if is_long else Client.SIDE_BUY
     sl_tp_status = ""
-    # Cancel existing SL/TP orders for this symbol first (safety measure)
     try:
-        logging.info(f"Attempting to cancel existing SL/TP orders for {TRADE_SYMBOL} before placing new ones.")
+        logging.info(f"Attempting to cancel existing SL/TP orders for {TRADE_SYMBOL}")
         open_orders = binance_client.futures_get_open_orders(symbol=TRADE_SYMBOL)
         for order in open_orders:
             if order['type'] in ['STOP_MARKET', 'TAKE_PROFIT_MARKET']:
@@ -101,12 +106,10 @@ def place_sl_tp_orders(side, entry_price):
                 logging.info(f"Cancelled existing order ID: {order['orderId']}")
     except Exception as e:
         logging.warning(f"Could not cancel existing orders (might be none): {e}")
-
-    # Place new SL/TP orders
     try:
         logging.info(f"Placing STOP_MARKET order at {stop_loss_price}")
         binance_client.futures_create_order(
-            symbol=TRADE_SYMBOL, side=close_side, type='STOP_MARKET', stopPrice=stop_loss_price, reduceOnly=True, closePosition=True, timeInForce='GTC') # Use GTC for stop orders
+            symbol=TRADE_SYMBOL, side=close_side, type='STOP_MARKET', stopPrice=stop_loss_price, reduceOnly=True, closePosition=True, timeInForce='GTC')
         sl_tp_status += f"✅ Stop-Loss set at ${stop_loss_price}\n"
     except BinanceAPIException as e:
         logging.error(f"Error placing Stop-Loss order: Code={e.code}, Msg={e.message}")
@@ -114,11 +117,10 @@ def place_sl_tp_orders(side, entry_price):
     except Exception as e:
         logging.error(f"Unexpected error placing Stop-Loss order: {e}")
         sl_tp_status += f"❌ Unexpected error setting Stop-Loss: {str(e)}\n"
-
     try:
         logging.info(f"Placing TAKE_PROFIT_MARKET order at {take_profit_price}")
         binance_client.futures_create_order(
-            symbol=TRADE_SYMBOL, side=close_side, type='TAKE_PROFIT_MARKET', stopPrice=take_profit_price, reduceOnly=True, closePosition=True, timeInForce='GTC') # Use GTC for TP orders
+            symbol=TRADE_SYMBOL, side=close_side, type='TAKE_PROFIT_MARKET', stopPrice=take_profit_price, reduceOnly=True, closePosition=True, timeInForce='GTC')
         sl_tp_status += f"✅ Take-Profit set at ${take_profit_price}"
     except BinanceAPIException as e:
         logging.error(f"Error placing Take-Profit order: Code={e.code}, Msg={e.message}")
@@ -131,12 +133,30 @@ def place_sl_tp_orders(side, entry_price):
 # --- FLASK ROUTES ---
 @app.route('/')
 def health_check():
-    # You can access http://your_ip/ to check if the server is running
     return "Bot server is running.", 200
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
+    global binance_client # Allow modifying the global client if re-initialization is needed
     try:
+        # Check if client failed during startup
+        if binance_client is None:
+            logging.error("Webhook received but Binance client is not initialized (failed on startup).")
+            # Try to re-initialize - maybe temporary issue?
+            try:
+                logging.info("Attempting to re-initialize Binance client...")
+                if not BINANCE_API_KEY or not BINANCE_API_SECRET:
+                     raise ValueError("Binance API Key or Secret still missing.")
+                binance_client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
+                binance_client.FUTURES_URL = 'https://fapi.binance.com'
+                server_time = binance_client.futures_time()
+                logging.info(f"Re-initialization successful. Server time: {server_time['serverTime']}")
+                send_telegram_message("✅ Bot recovered connection to Binance.")
+            except Exception as reinit_e:
+                logging.error(f"Re-initialization failed: {reinit_e}")
+                send_telegram_message(f"🚨 BOT ERROR: Still unable to connect to Binance. Check keys/logs.")
+                return jsonify({"status": "error", "message": "Binance client failed to initialize"}), 500
+
         # --- PARSE JSON DATA ---
         try:
             data = request.get_json()
@@ -153,81 +173,62 @@ def webhook():
         signal_type = data.get('action', '').upper().strip()
         if signal_type not in ['BUY', 'SELL']:
             logging.warning(f"Ignoring message: Invalid or missing 'action'. Received: {signal_type}")
-            # Do not send Telegram message for ignored alerts unless debugging
-            return jsonify({"status": "ignored, invalid action"}), 200 # Return 200 OK so TradingView doesn't retry
+            return jsonify({"status": "ignored, invalid action"}), 200
 
         # --- Extract quantity ---
         try:
             quantity_str = data.get('qty')
-            if quantity_str is None:
-                raise ValueError("Quantity ('qty') missing from JSON payload.")
+            if quantity_str is None: raise ValueError("'qty' missing.")
             quantity = float(quantity_str)
-            if quantity <= 0:
-                raise ValueError("Quantity must be positive.")
+            if quantity <= 0: raise ValueError("Quantity must be positive.")
         except (ValueError, TypeError) as qty_error:
-            logging.error(f"Could not parse valid quantity from data: {data.get('qty')}. Error: {qty_error}")
-            send_telegram_message(f"❌ **Trade Failed!**\nCould not parse valid quantity from alert: `{data.get('qty')}`")
+            logging.error(f"Invalid quantity: {data.get('qty')}. Error: {qty_error}")
+            send_telegram_message(f"❌ **Trade Failed!**\nInvalid quantity: `{data.get('qty')}`")
             return jsonify({"status": "error", "message": f"Invalid quantity: {qty_error}"}), 400
 
-        # --- FILTERS REMOVED ---
-        # No more quantity checks here
-
         # --- EXECUTE THE TRADE ---
-        # 1. Set Leverage (important before placing order)
         leverage_success, leverage_message = set_leverage(TRADE_SYMBOL, LEVERAGE)
         if not leverage_success:
-            # Send failure message if leverage setting fails critically
-            send_telegram_message(f"❌ **Trade Failed!**\nCould not set leverage.\n**Binance Error:** {leverage_message}")
-            return jsonify({"status": "error", "message": "Failed to set leverage"}), 500
+            send_telegram_message(f"❌ **Trade Failed!**\nLeverage Error.\n**Binance:** {leverage_message}")
+            return jsonify({"status": "error", "message": "Failed leverage"}), 500
 
-        # 2. Place Entry Order
         entry_order, entry_message = place_entry_order(signal_type, quantity)
 
-        if entry_order and entry_order.get('avgPrice'): # Check if order was placed and filled
-            # 3. If Entry is successful, get entry price and place SL/TP
+        if entry_order and entry_order.get('avgPrice'):
             entry_price = float(entry_order['avgPrice'])
-            order_side = entry_order['side'] # Use the actual side from the filled order confirmation
+            order_side = entry_order['side']
             sl_tp_message = place_sl_tp_orders(order_side, entry_price)
-
-            # 4. Send success message to Telegram
             final_tg_message = (
-                f"✅ **New Automated Trade Placed!** ✅\n\n"
-                f"**Signal:** {signal_type}\n" # Will show BUY or SELL
-                f"**Ticker:** {TRADE_SYMBOL}\n\n"
-                f"**Entry Price:** ${entry_price}\n"
-                f"**Quantity:** {quantity}\n\n"
-                f"**Binance Status:**\n{sl_tp_message}"
+                f"✅ **New Trade Placed!** ✅\n\n"
+                f"**Signal:** {signal_type}\n**Ticker:** {TRADE_SYMBOL}\n\n"
+                f"**Entry:** ${entry_price}\n**Qty:** {quantity}\n\n"
+                f"**Status:**\n{sl_tp_message}"
             )
             status_code = 200
         else:
-            # 4. Send failure message to Telegram
             final_tg_message = (
                 f"❌ **Trade Failed!** ❌\n\n"
-                f"**Signal:** {signal_type}\n"
-                f"**Ticker:** {TRADE_SYMBOL}\n"
-                f"**Quantity:** {quantity}\n\n"
-                f"**Binance Error:** {entry_message or 'Order placement failed or did not return avgPrice.'}"
+                f"**Signal:** {signal_type}\n**Ticker:** {TRADE_SYMBOL}\n**Qty:** {quantity}\n\n"
+                f"**Binance Error:** {entry_message or 'Order fail/no avgPrice.'}"
             )
-            status_code = 500 # Indicate server error if trade placement failed
+            status_code = 500
 
         send_telegram_message(final_tg_message)
-        return jsonify({"status": "processed", "binance_message": entry_message if not entry_order else "Trade successful"}), status_code
+        return jsonify({"status": "processed", "binance_message": entry_message if not entry_order else "OK"}), status_code
 
     except Exception as e:
-        logging.exception(f"FATAL ERROR in webhook processing: {e}") # Log the full traceback
-        send_telegram_message(f"🚨 **FATAL BOT ERROR** 🚨\n\nThe server encountered a critical error. Check logs.")
+        logging.exception(f"FATAL ERROR in webhook: {e}") # Log full traceback
+        send_telegram_message(f"🚨 **FATAL BOT ERROR** 🚨\nCheck logs.")
         return jsonify({"status": "error", "message": "Internal server error"}), 500
 
 # --- WSGI Entry Point (for Gunicorn) ---
-# This part remains the same, but we need the wsgi.py file
+# Need wsgi.py: from server import app
 
 if __name__ == '__main__':
-    # This block is mainly for local testing, Gunicorn uses the 'app' object via wsgi.py
     port = int(os.environ.get("PORT", 5000))
-    # Use waitress for a production-ready server if running directly (better than Flask dev server)
     try:
         from waitress import serve
         serve(app, host="0.0.0.0", port=port)
     except ImportError:
-        logging.warning("Waitress not found, using Flask development server (NOT FOR PRODUCTION).")
+        logging.warning("Waitress not found, using Flask dev server (NOT FOR PRODUCTION).")
         app.run(host="0.0.0.0", port=port)
