@@ -317,4 +317,3 @@ def webhook():
         logging.exception(f"FATAL ERROR in webhook: {e}")
         send_telegram_message(f"🚨 **FATAL BOT ERROR** 🚨\nCheck logs.")
         return jsonify({"status": "error", "message": "Internal server error"}), 500
-        
