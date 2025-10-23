@@ -1,6 +1,6 @@
 Flask
 requests
 gunicorn
-python-binance
+binance-connector
 waitress
 python-dotenv
